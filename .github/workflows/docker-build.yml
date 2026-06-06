@@ -1,0 +1,159 @@
+name: Build and Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号（如 1.0.0）'
+        required: true
+        default: 'latest'
+        type: string
+      cloudflared_version:
+        description: 'cloudflared 版本号（留空自动获取最新，如 2025.5.0）'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get cloudflared version
+        id: cloudflared
+        run: |
+          if [ -n "${{ inputs.cloudflared_version }}" ]; then
+            CLOUDFLARED_VERSION="${{ inputs.cloudflared_version }}"
+          else
+            CLOUDFLARED_VERSION=$(curl -sL https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r '.tag_name')
+          fi
+          if [ -z "$CLOUDFLARED_VERSION" ] || [ "$CLOUDFLARED_VERSION" = "null" ]; then
+            echo "ERROR: Failed to determine cloudflared version"
+            exit 1
+          fi
+          echo "version=$CLOUDFLARED_VERSION" >> $GITHUB_OUTPUT
+          echo "Using cloudflared version: $CLOUDFLARED_VERSION"
+
+      - name: Determine release version
+        id: rel
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+
+      - name: Build AMD64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          no-cache: true
+          build-args: |
+            CLOUDFLARED_VERSION=${{ steps.cloudflared.outputs.version }}
+          tags: cf-tunnel-manager:amd64
+          outputs: type=docker,dest=/tmp/cf-tunnel-manager-amd64.tar
+
+      - name: Build ARM64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          no-cache: true
+          build-args: |
+            CLOUDFLARED_VERSION=${{ steps.cloudflared.outputs.version }}
+          tags: cf-tunnel-manager:arm64
+          outputs: type=docker,dest=/tmp/cf-tunnel-manager-arm64.tar
+
+      - name: Compress images
+        run: |
+          gzip -9 /tmp/cf-tunnel-manager-amd64.tar
+          gzip -9 /tmp/cf-tunnel-manager-arm64.tar
+          echo "=== Image sizes ==="
+          ls -lh /tmp/cf-tunnel-manager-*.tar.gz
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.rel.outputs.version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "v${{ steps.rel.outputs.version }}"
+          body: |
+            ## CF Tunnel Manager v${{ steps.rel.outputs.version }}
+
+            Cloudflare Tunnel + IP优选 管理服务
+
+            内置 cloudflared 版本: ${{ steps.cloudflared.outputs.version }}
+
+            ### 架构
+            - **AMD64** (x86_64) - 适用于普通 PC、服务器、云主机
+            - **ARM64** (aarch64) - 适用于树莓派、ARM 服务器
+
+            ### 快速部署
+
+            ```bash
+            # 1. 下载对应架构的镜像（以 AMD64 为例）
+            # 2. 加载镜像
+            docker load -i cf-tunnel-manager-amd64.tar.gz
+
+            # 3. 运行
+            docker run -d \
+              --name cf-tunnel-manager \
+              --network host \
+              -v ./data:/app/data \
+              -e WEB_PORT=8080 \
+              -e TZ=Asia/Shanghai \
+              --restart unless-stopped \
+              cf-tunnel-manager:amd64
+
+            # 4. 访问 http://<IP>:8080
+            ```
+
+            ### ARM64 设备
+
+            ```bash
+            docker load -i cf-tunnel-manager-arm64.tar.gz
+            docker run -d \
+              --name cf-tunnel-manager \
+              --network host \
+              -v ./data:/app/data \
+              -e WEB_PORT=8080 \
+              -e TZ=Asia/Shanghai \
+              --restart unless-stopped \
+              cf-tunnel-manager:arm64
+            ```
+
+            ### 使用流程
+
+            1. 访问管理页面，设置密码
+            2. 填写 Cloudflare API Token
+            3. 选择域名
+            4. 创建隧道（输入本地服务地址和子域名）
+            5. 添加优选IP，一键应用到所有隧道
+
+            ### 访问流程
+
+            国内用户 → 优选CF IP → Cloudflare代理 → Tunnel → 甲骨文VPS
+
+          draft: false
+          prerelease: false
+          files: |
+            /tmp/cf-tunnel-manager-amd64.tar.gz
+            /tmp/cf-tunnel-manager-arm64.tar.gz

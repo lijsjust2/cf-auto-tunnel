@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CF Tunnel Manager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 设置密码页面 -->
+<div id="setup-page" class="auth-container" style="display:none">
+  <div class="auth-card">
+    <h1>CF Tunnel Manager</h1>
+    <p class="subtitle">首次使用，请设置管理密码</p>
+    <form onsubmit="doSetup();return false;">
+      <input type="password" id="setup-pwd" placeholder="管理密码" required minlength="4">
+      <input type="password" id="setup-pwd2" placeholder="确认密码" required>
+      <button type="submit">设置密码</button>
+    </form>
+    <div id="setup-error" style="color:var(--danger);font-size:13px;margin-top:10px"></div>
+  </div>
+</div>
+
+<!-- 登录页面 -->
+<div id="login-page" class="auth-container" style="display:none">
+  <div class="auth-card">
+    <h1>CF Tunnel Manager</h1>
+    <p class="subtitle">请输入管理密码</p>
+    <form onsubmit="doLogin();return false;">
+      <input type="password" id="login-pwd" placeholder="管理密码" autofocus>
+      <button type="submit">登录</button>
+    </form>
+    <div id="login-error" style="color:var(--danger);font-size:13px;margin-top:10px"></div>
+  </div>
+</div>
+
+<!-- 主页面 -->
+<div id="main-page" class="container" style="display:none">
+  <header>
+    <h1>CF Tunnel Manager</h1>
+    <p>Cloudflare Tunnel + IP优选 加速访问甲骨文VPS</p>
+  </header>
+
+  <div class="status-bar" id="statusBar">
+    <div class="status-dot"></div>
+    <span>服务运行中</span>
+    <span style="margin-left:auto;color:var(--text-secondary)" id="statusInfo">加载中...</span>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('setup',this)">快速配置</div>
+    <div class="tab" onclick="switchTab('tunnels',this)">隧道管理</div>
+    <div class="tab" onclick="switchTab('ip',this)">IP优选</div>
+    <div class="tab" onclick="switchTab('dns',this)">DNS管理</div>
+  </div>
+
+  <!-- 快速配置 -->
+  <div id="tab-setup" class="tab-content active">
+    <div class="card" id="card-token">
+      <h2><span class="step-badge">1</span>配置 Cloudflare API Token</h2>
+      <div class="guide" style="margin-top:0;margin-bottom:16px">
+        前往 <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" style="color:var(--success)">Cloudflare API Token 页面</a> 创建 Token<br>
+        需要权限：<code>Zone.Zone Read</code> + <code>Zone.DNS Edit</code> + <code>Zone.Settings Edit</code> + <code>Account.Cloudflare Tunnel Edit</code>
+      </div>
+      <div class="form-group">
+        <label>API Token</label>
+        <input type="password" id="apiToken" placeholder="粘贴你的 Cloudflare API Token">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="testAndSaveToken()">保存并测试</button>
+      </div>
+      <div id="tokenResult" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card" id="card-zone" style="display:none">
+      <h2><span class="step-badge">2</span>选择域名</h2>
+      <div class="btn-row" style="margin-top:0">
+        <button class="btn btn-primary" onclick="loadZones()">加载域名列表</button>
+      </div>
+      <div id="zoneList" class="zone-select" style="margin-top:16px"></div>
+    </div>
+
+    <div class="card" id="card-zone-selected" style="display:none">
+      <h2><span class="step-badge">2</span>域名 <span style="color:var(--success);font-size:13px" id="zoneNameDisplay"></span></h2>
+      <div class="btn-row">
+        <button class="btn btn-secondary btn-sm" onclick="changeZone()">更换域名</button>
+      </div>
+    </div>
+
+    <div class="card" id="card-create-tunnel" style="display:none">
+      <h2><span class="step-badge">3</span>创建隧道</h2>
+      <div class="guide" style="margin-top:0;margin-bottom:16px">
+        输入本地服务地址和子域名，系统将自动创建 Cloudflare Tunnel + DNS记录<br>
+        <strong>国内用户访问流程：</strong>
+      </div>
+      <div class="flow-diagram">
+        <span class="highlight">国内用户</span> <span class="arrow">&rarr;</span> <span class="highlight">优选CF IP</span> <span class="arrow">&rarr;</span> Cloudflare 代理<br>
+        <span class="arrow">&darr;</span><br>
+        <span class="highlight">Cloudflare Tunnel</span> <span class="arrow">&rarr;</span> <span class="highlight">甲骨文VPS</span> 本地服务
+      </div>
+      <div class="form-group" style="margin-top:16px">
+        <label>隧道名称（备注）</label>
+        <input type="text" id="tunnelName" placeholder="例如: 1Panel">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>本地服务地址</label>
+          <input type="text" id="serviceUrl" placeholder="http://localhost:9999">
+        </div>
+        <div class="form-group">
+          <label>协议</label>
+          <select id="serviceProtocol">
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>子域名（访问地址: <span id="previewDomain" style="color:var(--success)">子域名.xxx</span>）</label>
+        <input type="text" id="tunnelSubdomain" placeholder="例如: 1panel" oninput="updatePreview()">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="createTunnel()">创建隧道</button>
+      </div>
+      <div id="createTunnelResult" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- 隧道管理 -->
+  <div id="tab-tunnels" class="tab-content">
+    <div class="card">
+      <h2>已创建的隧道</h2>
+      <div class="btn-row" style="margin-top:0;margin-bottom:12px">
+        <button class="btn btn-secondary btn-sm" onclick="loadTunnels()">刷新</button>
+      </div>
+      <div id="tunnelList" class="tunnel-list">
+        <div style="color:var(--text-secondary);font-size:13px;text-align:center;padding:20px">点击「刷新」加载</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- IP优选 -->
+  <div id="tab-ip" class="tab-content">
+    <div class="card">
+      <h2>添加优选IP / 域名</h2>
+      <div class="guide" style="margin-top:0;margin-bottom:16px">
+        支持输入 <strong>IPv4地址</strong>（如 <code>104.16.0.1</code>）或 <strong>走CF的域名</strong>（如 <code>icook.hk</code>），域名会自动解析为IP<br>
+        <strong>优选IP会写入隧道域名的A记录，实现加速访问！</strong>
+      </div>
+      <div class="form-group">
+        <label>优选IP地址 或 可优选域名</label>
+        <input type="text" id="preferredIP" placeholder="例如: 104.16.0.1 或 icook.hk">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="addPreferredIP()">添加</button>
+        <button class="btn btn-secondary" onclick="addCommonIPs()">添加常用优选</button>
+      </div>
+      <div id="ipResult" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card">
+      <h2>已添加的优选IP</h2>
+      <div id="ipTags" class="ip-tags">
+        <span style="color:var(--text-secondary);font-size:13px">暂无优选IP</span>
+      </div>
+    </div>
+
+    <div class="card" id="card-apply-ip" style="display:none">
+      <h2>一键应用优选IP到所有隧道</h2>
+      <div class="guide">
+        将优选IP更新到所有隧道<strong>访问域名</strong>的A记录（开启小黄云代理）
+      </div>
+      <div class="form-group" style="margin-top:12px">
+        <label>选择要应用的优选IP</label>
+        <select id="applyIPSelect"></select>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-success" onclick="applyPreferredIP()">应用到所有隧道</button>
+      </div>
+      <div id="applyResult" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- DNS管理 -->
+  <div id="tab-dns" class="tab-content">
+    <div class="card">
+      <h2>DNS 记录</h2>
+      <div class="btn-row" style="margin-top:0;margin-bottom:16px">
+        <button class="btn btn-primary" onclick="loadDNSRecords()">刷新记录</button>
+      </div>
+      <div id="dnsList">
+        <div style="color:var(--text-secondary);font-size:13px;text-align:center;padding:20px">点击「刷新记录」加载</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>SSL/TLS 设置</h2>
+      <div class="guide" style="margin-top:0;margin-bottom:12px">
+        后端为 HTTP 时选 <code>Flexible</code>，后端为 HTTPS 时选 <code>Full</code>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>SSL 模式</label>
+          <select id="sslMode">
+            <option value="flexible">Flexible (后端HTTP)</option>
+            <option value="full">Full (后端HTTPS)</option>
+            <option value="strict">Full Strict (后端有效证书)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>&nbsp;</label>
+          <button class="btn btn-primary" onclick="updateSSL()" style="width:100%">更新SSL设置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 日志弹窗 -->
+<div id="logModal" class="modal-overlay">
+  <div class="modal" style="min-width:600px">
+    <h3>隧道日志</h3>
+    <div id="logContent" class="log-viewer">加载中...</div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="closeLogModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ==================== 全局状态 ====================
+let systemInfo = {};
+
+// ==================== 初始化 ====================
+async function init() {
+  try {
+    const res = await fetch('/api/auth/status');
+    const data = await res.json();
+    if (data.hasPassword) {
+      showPage('login');
+    } else {
+      showPage('setup');
+    }
+  } catch (e) {
+    showPage('login');
+  }
+}
+
+function showPage(name) {
+  document.getElementById('setup-page').style.display = name === 'setup' ? 'flex' : 'none';
+  document.getElementById('login-page').style.display = name === 'login' ? 'flex' : 'none';
+  document.getElementById('main-page').style.display = name === 'main' ? 'block' : 'none';
+  if (name === 'main') {
+    loadSystemInfo();
+  }
+}
+
+// ==================== 认证 ====================
+async function doSetup() {
+  const pwd = document.getElementById('setup-pwd').value;
+  const pwd2 = document.getElementById('setup-pwd2').value;
+  if (pwd !== pwd2) {
+    document.getElementById('setup-error').textContent = '两次密码不一致';
+    return;
+  }
+  const res = await api('POST', '/api/auth/setup', { password: pwd });
+  if (res.success) {
+    showPage('login');
+  } else {
+    document.getElementById('setup-error').textContent = res.message || '设置失败';
+  }
+}
+
+async function doLogin() {
+  const pwd = document.getElementById('login-pwd').value;
+  const res = await api('POST', '/api/auth/login', { password: pwd });
+  if (res.success) {
+    showPage('main');
+  } else {
+    document.getElementById('login-error').textContent = res.message || '密码错误';
+    document.getElementById('login-pwd').value = '';
+  }
+}
+
+// ==================== API 工具 ====================
+async function api(method, path, body) {
+  const options = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) options.body = JSON.stringify(body);
+  const res = await fetch(path, options);
+  return await res.json();
+}
+
+function showToast(msg, isError) {
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.className = 'toast' + (isError ? ' error' : '');
+  setTimeout(() => toast.classList.add('show'), 10);
+  setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+// ==================== Tab 切换 ====================
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ==================== 系统信息 ====================
+async function loadSystemInfo() {
+  const res = await api('GET', '/api/system/info');
+  if (res.success) {
+    systemInfo = res.data || res;
+    updateSetupUI();
+  }
+}
+
+function updateSetupUI() {
+  const hasToken = systemInfo.hasApiToken;
+  const hasZone = !!systemInfo.zoneName;
+
+  // Token 卡片
+  const cardToken = document.getElementById('card-token');
+  if (hasToken) {
+    cardToken.querySelector('h2').innerHTML = '<span class="step-badge">1</span>API Token <span style="color:var(--success);font-size:13px">&#10003; 已配置</span>';
+    cardToken.querySelector('.form-group').style.display = 'none';
+    cardToken.querySelector('.guide').style.display = 'none';
+    cardToken.querySelector('.btn-row').innerHTML = '<button class="btn btn-secondary btn-sm" onclick="resetToken()">重新配置</button>';
+    cardToken.querySelector('#tokenResult').innerHTML = '';
+  }
+
+  // Zone 卡片
+  document.getElementById('card-zone').style.display = hasToken && !hasZone ? 'block' : 'none';
+  document.getElementById('card-zone-selected').style.display = hasToken && hasZone ? 'block' : 'none';
+  if (hasZone) {
+    document.getElementById('zoneNameDisplay').textContent = systemInfo.zoneName;
+  }
+
+  // 创建隧道卡片
+  document.getElementById('card-create-tunnel').style.display = hasToken && hasZone ? 'block' : 'none';
+  if (hasZone) {
+    document.getElementById('previewDomain').textContent = '子域名.' + systemInfo.zoneName;
+  }
+
+  // 状态栏
+  const statusInfo = document.getElementById('statusInfo');
+  if (!hasToken) {
+    statusInfo.textContent = '未配置API Token';
+  } else if (!hasZone) {
+    statusInfo.textContent = '未选择域名';
+  } else {
+    statusInfo.textContent = systemInfo.zoneName + ' - ' + (systemInfo.runningCount || 0) + '/' + (systemInfo.tunnelCount || 0) + ' 隧道运行中';
+  }
+
+  const dot = document.querySelector('.status-dot');
+  dot.className = 'status-dot' + (!hasToken ? ' error' : (!hasZone ? ' warning' : ''));
+
+  // 加载优选IP
+  loadPreferredIPs();
+}
+
+// ==================== API Token ====================
+async function testAndSaveToken() {
+  const token = document.getElementById('apiToken').value.trim();
+  if (!token) return showToast('请输入API Token', true);
+  const el = document.getElementById('tokenResult');
+  el.innerHTML = '<div class="loading">测试中...</div>';
+  const res = await api('POST', '/api/cf/test-token', { token });
+  if (res.success) {
+    el.innerHTML = '<div class="alert alert-success">&#10003; 连接成功！找到 ' + (res.zones || 0) + ' 个域名</div>';
+    setTimeout(() => { loadSystemInfo(); }, 1000);
+  } else {
+    el.innerHTML = '<div class="alert alert-warning">&#10007; ' + (res.message || '连接失败') + '</div>';
+  }
+}
+
+async function resetToken() {
+  await api('POST', '/api/cf/test-token', { token: '' });
+  loadSystemInfo();
+}
+
+// ==================== 域名选择 ====================
+async function loadZones() {
+  const listEl = document.getElementById('zoneList');
+  listEl.innerHTML = '<div class="loading">加载中...</div>';
+  const res = await api('GET', '/api/cf/zones');
+  if (res.success) {
+    const zones = res.zones || res.data?.zones || [];
+    listEl.innerHTML = zones.map(z =>
+      '<div class="zone-item" onclick="selectZone(\'' + z.id + '\',\'' + z.name + '\')">' +
+      '<div class="name">' + z.name + '</div>' +
+      '<div class="status">' + z.status + '</div></div>'
+    ).join('');
+  } else {
+    listEl.innerHTML = '<div class="alert alert-warning">' + (res.message || '加载失败') + '</div>';
+  }
+}
+
+async function selectZone(zoneId, zoneName) {
+  const res = await api('POST', '/api/cf/select-zone', { zoneId, zoneName });
+  if (res.success) loadSystemInfo();
+}
+
+async function changeZone() {
+  await api('POST', '/api/cf/select-zone', { zoneId: '', zoneName: '' });
+  loadSystemInfo();
+}
+
+function updatePreview() {
+  const sub = document.getElementById('tunnelSubdomain').value.trim() || '子域名';
+  const zone = systemInfo.zoneName || 'xxx';
+  document.getElementById('previewDomain').textContent = sub + '.' + zone;
+}
+
+// ==================== 隧道管理 ====================
+async function createTunnel() {
+  const name = document.getElementById('tunnelName').value.trim();
+  const serviceUrl = document.getElementById('serviceUrl').value.trim();
+  const protocol = document.getElementById('serviceProtocol').value;
+  const subdomain = document.getElementById('tunnelSubdomain').value.trim();
+
+  if (!serviceUrl) return showToast('请输入本地服务地址', true);
+  if (!subdomain) return showToast('请输入子域名', true);
+
+  const el = document.getElementById('createTunnelResult');
+  el.innerHTML = '<div class="loading">创建中... 正在配置 Tunnel 和 DNS</div>';
+
+  const res = await api('POST', '/api/tunnels', { name, serviceUrl, protocol, subdomain });
+  if (res.success) {
+    const info = res.tunnel || res.data?.tunnel || {};
+    el.innerHTML = '<div class="alert alert-success">&#10003; 隧道创建成功！<br>' +
+      'Tunnel ID: ' + (info.id || '') + '<br>' +
+      '访问地址: https://' + (info.publicDomain || subdomain + '.' + systemInfo.zoneName) + '<br>' +
+      (info.preferredIP ? '优选IP: ' + info.preferredIP + ' (A记录, 小黄云)' : 'DNS: CNAME 指向隧道') + '<br>' +
+      'cloudflared 已自动启动</div>';
+    setTimeout(() => { loadSystemInfo(); loadTunnels(); }, 2000);
+  } else {
+    el.innerHTML = '<div class="alert alert-warning">&#10007; ' + (res.message || '创建失败') + '</div>';
+  }
+}
+
+async function loadTunnels() {
+  const listEl = document.getElementById('tunnelList');
+  listEl.innerHTML = '<div class="loading">加载中...</div>';
+  const res = await api('GET', '/api/tunnels');
+  if (res.success) {
+    const tunnels = res.tunnels || res.data?.tunnels || [];
+    if (tunnels.length === 0) {
+      listEl.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;text-align:center;padding:20px">暂无隧道，请在「快速配置」中创建</div>';
+      return;
+    }
+    listEl.innerHTML = tunnels.map(t => {
+      const statusClass = t.status || 'stopped';
+      const statusText = t.status === 'running' ? '运行中' : (t.status === 'error' ? '错误' : '已停止');
+      return '<div class="tunnel-item">' +
+        '<div class="header">' +
+          '<div class="name">' + (t.name || '未命名') + '</div>' +
+          '<div class="status-badge ' + statusClass + '">' + statusText + '</div>' +
+        '</div>' +
+        '<div class="info">' +
+          '访问地址: <span class="domain">https://' + t.publicDomain + '</span><br>' +
+          '本地服务: <span class="service">' + t.serviceUrl + '</span><br>' +
+          'Tunnel ID: ' + (t.tunnelId || '').substring(0, 16) + '...' +
+        '</div>' +
+        '<div class="actions">' +
+          (t.status === 'running'
+            ? '<button class="btn btn-secondary btn-sm" onclick="stopTunnel(\'' + t.id + '\')">停止</button>'
+            : '<button class="btn btn-success btn-sm" onclick="startTunnel(\'' + t.id + '\')">启动</button>') +
+          '<button class="btn btn-secondary btn-sm" onclick="viewLogs(\'' + t.id + '\')">日志</button>' +
+          '<button class="btn btn-danger btn-sm" onclick="deleteTunnel(\'' + t.id + '\')">删除</button>' +
+        '</div></div>';
+    }).join('');
+  } else {
+    listEl.innerHTML = '<div class="alert alert-warning">' + (res.message || '加载失败') + '</div>';
+  }
+}
+
+async function startTunnel(id) {
+  const res = await api('POST', '/api/tunnels/' + id + '/start');
+  if (res.success) showToast('隧道已启动');
+  else showToast(res.message || '启动失败', true);
+  loadTunnels();
+}
+
+async function stopTunnel(id) {
+  const res = await api('POST', '/api/tunnels/' + id + '/stop');
+  if (res.success) showToast('隧道已停止');
+  else showToast(res.message || '停止失败', true);
+  loadTunnels();
+}
+
+async function deleteTunnel(id) {
+  if (!confirm('确定删除此隧道？将同时删除 Cloudflare Tunnel 和 DNS 记录')) return;
+  const res = await api('DELETE', '/api/tunnels/' + id);
+  if (res.success) showToast('隧道已删除');
+  else showToast(res.message || '删除失败', true);
+  loadTunnels();
+  loadSystemInfo();
+}
+
+async function viewLogs(id) {
+  document.getElementById('logModal').classList.add('show');
+  document.getElementById('logContent').textContent = '加载中...';
+  const res = await api('GET', '/api/tunnels/' + id + '/logs');
+  if (res.success) {
+    document.getElementById('logContent').textContent = res.logs || res.data?.logs || '暂无日志';
+  } else {
+    document.getElementById('logContent').textContent = '获取日志失败: ' + (res.message || '');
+  }
+}
+
+function closeLogModal() {
+  document.getElementById('logModal').classList.remove('show');
+}
+
+// ==================== 优选IP ====================
+let preferredIPs = [];
+
+async function loadPreferredIPs() {
+  const res = await api('GET', '/api/system/info');
+  if (res.success) {
+    preferredIPs = res.preferredIPs || res.data?.preferredIPs || [];
+    renderIPs();
+  }
+}
+
+function renderIPs() {
+  const tagsEl = document.getElementById('ipTags');
+  if (preferredIPs.length === 0) {
+    tagsEl.innerHTML = '<span style="color:var(--text-secondary);font-size:13px">暂无优选IP</span>';
+    document.getElementById('card-apply-ip').style.display = 'none';
+    return;
+  }
+
+  tagsEl.innerHTML = preferredIPs.map((ip, i) =>
+    '<span class="ip-tag">' +
+    (ip.type === 'domain' ? ip.value + ' <span class="resolved">&rarr; ' + (ip.resolved || '待解析') + '</span>' : ip.value) +
+    ' <span class="remove" onclick="removeIP(' + i + ')">&times;</span></span>'
+  ).join('');
+
+  // 更新应用选择框
+  const select = document.getElementById('applyIPSelect');
+  select.innerHTML = preferredIPs.map((ip, i) => {
+    const display = ip.type === 'domain' ? ip.value + ' (' + (ip.resolved || '待解析') + ')' : ip.value;
+    return '<option value="' + i + '">' + display + '</option>';
+  }).join('');
+
+  document.getElementById('card-apply-ip').style.display = 'block';
+}
+
+async function addPreferredIP() {
+  const ip = document.getElementById('preferredIP').value.trim();
+  if (!ip) return showToast('请输入IP或域名', true);
+  const el = document.getElementById('ipResult');
+  el.innerHTML = '<div class="loading">添加中...</div>';
+  const res = await api('POST', '/api/preferred-ips', { ip });
+  if (res.success) {
+    if (res.resolved) {
+      el.innerHTML = '<div class="alert alert-success">&#10003; 域名 ' + ip + ' 已解析为 ' + res.resolved + '</div>';
+    } else {
+      el.innerHTML = '<div class="alert alert-success">&#10003; 已添加</div>';
+    }
+    document.getElementById('preferredIP').value = '';
+    loadPreferredIPs();
+  } else {
+    el.innerHTML = '<div class="alert alert-warning">&#10007; ' + (res.message || '添加失败') + '</div>';
+  }
+}
+
+async function addCommonIPs() {
+  const commonItems = [
+    '104.16.0.1', '104.17.0.1', '104.18.0.1', '172.67.0.1',
+    'icook.hk', 'www.visa.com', 'www.who.int'
+  ];
+  let added = 0;
+  for (const item of commonItems) {
+    const res = await api('POST', '/api/preferred-ips', { ip: item });
+    if (res.success) added++;
+  }
+  if (added > 0) {
+    showToast('已添加 ' + added + ' 个优选IP');
+    loadPreferredIPs();
+  } else {
+    showToast('所有常用IP已存在', true);
+  }
+}
+
+async function removeIP(index) {
+  const res = await api('DELETE', '/api/preferred-ips', { index });
+  if (res.success) loadPreferredIPs();
+}
+
+async function applyPreferredIP() {
+  const ipIndex = parseInt(document.getElementById('applyIPSelect').value);
+  const ip = preferredIPs[ipIndex];
+  if (!ip) return showToast('请选择优选IP', true);
+  const ipValue = ip.type === 'domain' ? ip.resolved : ip.value;
+  if (!ipValue) return showToast('优选IP未解析', true);
+
+  const el = document.getElementById('applyResult');
+  el.innerHTML = '<div class="loading">应用中... 正在更新DNS记录</div>';
+  const res = await api('POST', '/api/preferred-ips/apply', { ip: ipValue });
+  if (res.success) {
+    el.innerHTML = '<div class="alert alert-success">&#10003; ' + (res.message || '已应用') + '</div>';
+  } else {
+    el.innerHTML = '<div class="alert alert-warning">&#10007; ' + (res.message || '应用失败') + '</div>';
+  }
+}
+
+// ==================== DNS管理 ====================
+async function loadDNSRecords() {
+  const listEl = document.getElementById('dnsList');
+  listEl.innerHTML = '<div class="loading">加载中...</div>';
+  const res = await api('GET', '/api/cf/dns');
+  if (res.success) {
+    const records = res.records || res.data?.records || [];
+    listEl.innerHTML =
+      '<table class="dns-table"><thead><tr><th>类型</th><th>名称</th><th>内容</th><th>代理</th></tr></thead><tbody>' +
+      records.map(r =>
+        '<tr><td>' + r.type + '</td><td>' + r.name + '</td><td>' + r.content + '</td>' +
+        '<td><span class="badge ' + (r.proxied ? 'proxied' : 'dns-only') + '">' + (r.proxied ? '已代理' : '仅DNS') + '</span></td></tr>'
+      ).join('') +
+      '</tbody></table>';
+  } else {
+    listEl.innerHTML = '<div class="alert alert-warning">' + (res.message || '加载失败') + '</div>';
+  }
+}
+
+async function updateSSL() {
+  const mode = document.getElementById('sslMode').value;
+  const res = await api('POST', '/api/cf/ssl', { mode });
+  if (res.success) showToast('SSL设置已更新');
+  else showToast(res.message || '更新失败', true);
+}
+
+// ==================== 启动 ====================
+init();
+</script>
+</body>
+</html>
