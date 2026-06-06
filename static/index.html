@@ -145,15 +145,15 @@
     <div class="card">
       <h2>添加优选IP / 域名</h2>
       <div class="guide" style="margin-top:0;margin-bottom:16px">
-        支持输入 <strong>IPv4地址</strong>（如 <code>104.16.0.1</code>）或 <strong>走CF的域名</strong>（如 <code>icook.hk</code>），域名会自动解析为IP<br>
-        <strong>优选IP会写入隧道域名的A记录，实现加速访问！</strong>
+        添加后<strong>自动应用</strong>到所有隧道，将DNS改为A记录指向优选IP（开启小黄云代理）<br>
+        支持输入 <strong>IPv4地址</strong>（如 <code>104.16.0.1</code>）或 <strong>走CF的域名</strong>（如 <code>icook.hk</code>），域名会自动解析为IP
       </div>
       <div class="form-group">
         <label>优选IP地址 或 可优选域名</label>
         <input type="text" id="preferredIP" placeholder="例如: 104.16.0.1 或 icook.hk">
       </div>
       <div class="btn-row">
-        <button class="btn btn-primary" onclick="addPreferredIP()">添加</button>
+        <button class="btn btn-primary" onclick="addPreferredIP()">添加并应用</button>
         <button class="btn btn-secondary" onclick="addCommonIPs()">添加常用优选</button>
       </div>
       <div id="ipResult" style="margin-top:12px"></div>
@@ -161,24 +161,12 @@
 
     <div class="card">
       <h2>已添加的优选IP</h2>
+      <div class="guide" style="margin-top:0;margin-bottom:8px;font-size:12px">
+        当前生效的优选IP会自动写入所有隧道域名的A记录，删除后会恢复为CNAME指向隧道
+      </div>
       <div id="ipTags" class="ip-tags">
         <span style="color:var(--text-secondary);font-size:13px">暂无优选IP</span>
       </div>
-    </div>
-
-    <div class="card" id="card-apply-ip" style="display:none">
-      <h2>一键应用优选IP到所有隧道</h2>
-      <div class="guide">
-        将优选IP更新到所有隧道<strong>访问域名</strong>的A记录（开启小黄云代理）
-      </div>
-      <div class="form-group" style="margin-top:12px">
-        <label>选择要应用的优选IP</label>
-        <select id="applyIPSelect"></select>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-success" onclick="applyPreferredIP()">应用到所有隧道</button>
-      </div>
-      <div id="applyResult" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -432,10 +420,9 @@ async function createTunnel() {
   if (res.success) {
     const info = res.tunnel || res.data?.tunnel || {};
     el.innerHTML = '<div class="alert alert-success">&#10003; 隧道创建成功！<br>' +
-      'Tunnel ID: ' + (info.id || '') + '<br>' +
       '访问地址: https://' + (info.publicDomain || subdomain + '.' + systemInfo.zoneName) + '<br>' +
-      (info.preferredIP ? '优选IP: ' + info.preferredIP + ' (A记录, 小黄云)' : 'DNS: CNAME 指向隧道') + '<br>' +
-      'cloudflared 已自动启动</div>';
+      'cloudflared 已自动启动<br>' +
+      '<span style="font-size:12px;color:var(--text-secondary)">提示：前往「IP优选」添加优选IP即可加速访问</span></div>';
     setTimeout(() => { loadSystemInfo(); loadTunnels(); }, 2000);
   } else {
     el.innerHTML = '<div class="alert alert-warning">&#10007; ' + (res.message || '创建失败') + '</div>';
@@ -531,7 +518,6 @@ function renderIPs() {
   const tagsEl = document.getElementById('ipTags');
   if (preferredIPs.length === 0) {
     tagsEl.innerHTML = '<span style="color:var(--text-secondary);font-size:13px">暂无优选IP</span>';
-    document.getElementById('card-apply-ip').style.display = 'none';
     return;
   }
 
@@ -540,29 +526,23 @@ function renderIPs() {
     (ip.type === 'domain' ? ip.value + ' <span class="resolved">&rarr; ' + (ip.resolved || '待解析') + '</span>' : ip.value) +
     ' <span class="remove" onclick="removeIP(' + i + ')">&times;</span></span>'
   ).join('');
-
-  // 更新应用选择框
-  const select = document.getElementById('applyIPSelect');
-  select.innerHTML = preferredIPs.map((ip, i) => {
-    const display = ip.type === 'domain' ? ip.value + ' (' + (ip.resolved || '待解析') + ')' : ip.value;
-    return '<option value="' + i + '">' + display + '</option>';
-  }).join('');
-
-  document.getElementById('card-apply-ip').style.display = 'block';
 }
 
 async function addPreferredIP() {
   const ip = document.getElementById('preferredIP').value.trim();
   if (!ip) return showToast('请输入IP或域名', true);
   const el = document.getElementById('ipResult');
-  el.innerHTML = '<div class="loading">添加中...</div>';
+  el.innerHTML = '<div class="loading">添加并应用中...</div>';
   const res = await api('POST', '/api/preferred-ips', { ip });
   if (res.success) {
+    let msg = '&#10003; 已添加';
     if (res.resolved) {
-      el.innerHTML = '<div class="alert alert-success">&#10003; 域名 ' + ip + ' 已解析为 ' + res.resolved + '</div>';
-    } else {
-      el.innerHTML = '<div class="alert alert-success">&#10003; 已添加</div>';
+      msg += '，域名解析为 ' + res.resolved;
     }
+    if (res.updated > 0) {
+      msg += '，已自动应用到 ' + res.updated + ' 个隧道';
+    }
+    el.innerHTML = '<div class="alert alert-success">' + msg + '</div>';
     document.getElementById('preferredIP').value = '';
     loadPreferredIPs();
   } else {
@@ -591,23 +571,6 @@ async function addCommonIPs() {
 async function removeIP(index) {
   const res = await api('DELETE', '/api/preferred-ips', { index });
   if (res.success) loadPreferredIPs();
-}
-
-async function applyPreferredIP() {
-  const ipIndex = parseInt(document.getElementById('applyIPSelect').value);
-  const ip = preferredIPs[ipIndex];
-  if (!ip) return showToast('请选择优选IP', true);
-  const ipValue = ip.type === 'domain' ? ip.resolved : ip.value;
-  if (!ipValue) return showToast('优选IP未解析', true);
-
-  const el = document.getElementById('applyResult');
-  el.innerHTML = '<div class="loading">应用中... 正在更新DNS记录</div>';
-  const res = await api('POST', '/api/preferred-ips/apply', { ip: ipValue });
-  if (res.success) {
-    el.innerHTML = '<div class="alert alert-success">&#10003; ' + (res.message || '已应用') + '</div>';
-  } else {
-    el.innerHTML = '<div class="alert alert-warning">&#10007; ' + (res.message || '应用失败') + '</div>';
-  }
 }
 
 // ==================== DNS管理 ====================

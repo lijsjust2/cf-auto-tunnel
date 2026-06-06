@@ -270,53 +270,20 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 		// 不返回错误，继续尝试创建DNS记录
 	}
 
-	// 5. 创建 DNS 记录
-	// 获取优选IP，如果有则用优选IP的A记录+小黄云，否则用CNAME
-	var preferredIP string
-	if len(cfg.PreferredIPs) > 0 {
-		ip := cfg.PreferredIPs[0]
-		preferredIP = ip.Resolved
-		if ip.Type == "domain" && ip.Resolved == "" {
-			ips, err := ResolveDomain(ip.Value)
-			if err == nil && len(ips) > 0 {
-				preferredIP = ips[0]
-			}
-		}
-	}
-
-	if preferredIP != "" {
-		// 使用优选IP的A记录 + 开启代理(小黄云)
-		_, err = cf.CreateDNSRecord(cfg.ZoneID, "A", req.Subdomain, preferredIP, true)
-		if err != nil {
-			// 如果记录已存在，更新它
-			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "Record already exists") {
-				records, _ := cf.GetDNSRecords(cfg.ZoneID)
-				for _, rec := range records {
-					if rec.Name == publicDomain {
-						cf.UpdateDNSRecord(cfg.ZoneID, rec.ID, "A", req.Subdomain, preferredIP, true)
-						break
-					}
+	// 5. 创建 CNAME DNS 记录指向隧道（始终用CNAME，优选IP单独管理）
+	cnameTarget := tunnel.ID + ".cfargotunnel.com"
+	_, err = cf.CreateDNSRecord(cfg.ZoneID, "CNAME", req.Subdomain, cnameTarget, true)
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "Record already exists") {
+			records, _ := cf.GetDNSRecords(cfg.ZoneID)
+			for _, rec := range records {
+				if rec.Name == publicDomain {
+					cf.UpdateDNSRecord(cfg.ZoneID, rec.ID, "CNAME", req.Subdomain, cnameTarget, true)
+					break
 				}
-			} else {
-				log.Printf("创建A记录失败: %v", err)
 			}
-		}
-	} else {
-		// 没有优选IP，使用CNAME指向隧道
-		cnameTarget := tunnel.ID + ".cfargotunnel.com"
-		_, err = cf.CreateDNSRecord(cfg.ZoneID, "CNAME", req.Subdomain, cnameTarget, true)
-		if err != nil {
-			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "Record already exists") {
-				records, _ := cf.GetDNSRecords(cfg.ZoneID)
-				for _, rec := range records {
-					if rec.Name == publicDomain {
-						cf.UpdateDNSRecord(cfg.ZoneID, rec.ID, "CNAME", req.Subdomain, cnameTarget, true)
-						break
-					}
-				}
-			} else {
-				log.Printf("创建CNAME记录失败: %v", err)
-			}
+		} else {
+			log.Printf("创建CNAME记录失败: %v", err)
 		}
 	}
 
@@ -367,7 +334,6 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 			"name":         tunnelName,
 			"publicDomain": publicDomain,
 			"serviceUrl":   req.ServiceURL,
-			"preferredIP":  preferredIP,
 		},
 	})
 }
@@ -565,9 +531,35 @@ func (h *Handler) AddPreferredIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 自动应用优选IP到所有隧道（更新DNS记录为A记录+小黄云）
+	updated := 0
+	if ip.Resolved != "" {
+		cfg, _ := h.configMgr.Load()
+		if cfg.APIToken != "" && len(cfg.Tunnels) > 0 {
+			cf := NewCloudflareAPI(cfg.APIToken)
+			for _, tunnel := range cfg.Tunnels {
+				records, err := cf.GetDNSRecords(tunnel.ZoneID)
+				if err != nil {
+					continue
+				}
+				for _, rec := range records {
+					if rec.Name == tunnel.PublicDomain {
+						_, err := cf.UpdateDNSRecord(tunnel.ZoneID, rec.ID, "A", tunnel.Subdomain, ip.Resolved, true)
+						if err == nil {
+							updated++
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
 	jsonResponse(w, 200, map[string]interface{}{
 		"success":  true,
 		"resolved": ip.Resolved,
+		"updated":  updated,
+		"message":  fmt.Sprintf("已添加并自动应用到 %d 个隧道", updated),
 	})
 }
 
