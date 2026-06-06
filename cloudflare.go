@@ -175,10 +175,12 @@ func (cf *CloudflareAPI) DeleteDNSRecord(zoneID, recordID string) error {
 }
 
 // CreateTunnel 创建 Cloudflare Tunnel
+// config_src=cloudflare 表示配置由 Cloudflare 管理（远程配置）
 func (cf *CloudflareAPI) CreateTunnel(accountID, name string) (*TunnelInfo, error) {
 	body := map[string]interface{}{
-		"name":  name,
-		"tunnel_type": "cfa_tunnel",
+		"name":       name,
+		"tunnel_type": "cfd_tunnel",
+		"config_src":  "cloudflare",
 	}
 	result, err := cf.doRequest("POST", fmt.Sprintf("/accounts/%s/cfd_tunnel", accountID), body)
 	if err != nil {
@@ -189,6 +191,40 @@ func (cf *CloudflareAPI) CreateTunnel(accountID, name string) (*TunnelInfo, erro
 		return nil, err
 	}
 	return &tunnel, nil
+}
+
+// ConfigureTunnel 配置隧道的 ingress 规则（远程配置）
+// 这是关键步骤：告诉 Cloudflare 收到某个 hostname 的请求时转发到哪个本地服务
+func (cf *CloudflareAPI) ConfigureTunnel(accountID, tunnelID, hostname, serviceURL string) error {
+	body := map[string]interface{}{
+		"config": map[string]interface{}{
+			"ingress": []map[string]interface{}{
+				{
+					"hostname":      hostname,
+					"service":       serviceURL,
+					"originRequest": map[string]interface{}{},
+				},
+				{
+					"service": "http_status:404",
+				},
+			},
+		},
+	}
+	_, err := cf.doRequest("PUT", fmt.Sprintf("/accounts/%s/cfd_tunnel/%s/configurations", accountID, tunnelID), body)
+	return err
+}
+
+// GetTunnelConfig 获取隧道的当前配置
+func (cf *CloudflareAPI) GetTunnelConfig(accountID, tunnelID string) (map[string]interface{}, error) {
+	result, err := cf.doRequest("GET", fmt.Sprintf("/accounts/%s/cfd_tunnel/%s/configurations", accountID, tunnelID), nil)
+	if err != nil {
+		return nil, err
+	}
+	var config map[string]interface{}
+	if err := json.Unmarshal(result, &config); err != nil {
+		return nil, err
+	}
+	return config, nil
 }
 
 // DeleteTunnel 删除 Cloudflare Tunnel
@@ -223,16 +259,7 @@ func (cf *CloudflareAPI) GetTunnelToken(accountID, tunnelID string) (string, err
 	return token, nil
 }
 
-// CreateTunnelRoute 创建隧道路由（CNAME 到隧道）
-func (cf *CloudflareAPI) CreateTunnelRoute(tunnelID, zoneID, hostname, service string) error {
-	body := map[string]interface{}{
-		"tunnel_id": tunnelID,
-		"hostname":  hostname,
-		"service":   service,
-	}
-	_, err := cf.doRequest("POST", fmt.Sprintf("/zones/%s/tunnel_route", zoneID), body)
-	return err
-}
+
 
 // GetAccountID 通过 Zone ID 获取 Account ID
 func (cf *CloudflareAPI) GetAccountID(zoneID string) (string, error) {

@@ -240,7 +240,7 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. 创建 Tunnel
+	// 2. 创建 Tunnel（config_src=cloudflare，远程配置）
 	tunnelName := req.Name
 	if tunnelName == "" {
 		tunnelName = req.Subdomain
@@ -251,15 +251,26 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. 获取 Tunnel Token
-	tunnelToken, err := cf.GetTunnelToken(accountID, tunnel.ID)
-	if err != nil {
-		log.Printf("获取Tunnel Token失败: %v，尝试继续", err)
-		tunnelToken = ""
+	// 3. 获取 Tunnel Token（创建响应中可能已包含，也单独获取确保拿到）
+	tunnelToken := tunnel.Token
+	if tunnelToken == "" {
+		token, err := cf.GetTunnelToken(accountID, tunnel.ID)
+		if err != nil {
+			log.Printf("获取Tunnel Token失败: %v，尝试继续", err)
+		} else {
+			tunnelToken = token
+		}
 	}
 
-	// 4. 创建 CNAME DNS 记录指向隧道
+	// 4. 配置 Tunnel 的 ingress 规则（关键步骤！）
+	// 告诉 Cloudflare：收到 publicDomain 的请求时，转发到 serviceURL
 	publicDomain := req.Subdomain + "." + cfg.ZoneName
+	if err := cf.ConfigureTunnel(accountID, tunnel.ID, publicDomain, req.ServiceURL); err != nil {
+		log.Printf("配置隧道ingress规则失败: %v", err)
+		// 不返回错误，继续尝试创建DNS记录
+	}
+
+	// 5. 创建 DNS 记录
 	// 获取优选IP，如果有则用优选IP的A记录+小黄云，否则用CNAME
 	var preferredIP string
 	if len(cfg.PreferredIPs) > 0 {
@@ -309,7 +320,7 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 5. 设置 SSL
+	// 6. 设置 SSL
 	protocol := req.Protocol
 	if protocol == "" {
 		protocol = "http"
@@ -323,7 +334,7 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	cf.UpdateSSLSetting(cfg.ZoneID, sslMode)
 
-	// 6. 保存隧道配置
+	// 7. 保存隧道配置
 	tunnelCfg := TunnelConfig{
 		Name:         tunnelName,
 		TunnelID:     tunnel.ID,
@@ -338,7 +349,7 @@ func (h *Handler) CreateTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	h.configMgr.AddTunnel(tunnelCfg)
 
-	// 7. 自动启动隧道
+	// 8. 自动启动隧道
 	if tunnelToken != "" {
 		if err := h.tunnelProc.StartTunnel(tunnel.ID, tunnelToken); err != nil {
 			log.Printf("启动隧道失败: %v", err)
