@@ -544,7 +544,8 @@ func (h *Handler) AddPreferredIP(w http.ResponseWriter, r *http.Request) {
 				}
 				for _, rec := range records {
 					if rec.Name == tunnel.PublicDomain {
-						_, err := cf.UpdateDNSRecord(tunnel.ZoneID, rec.ID, "A", tunnel.Subdomain, ip.Resolved, true)
+						// 更新为优选IP的A记录（proxied=false，避免 Error 1000）
+						_, err := cf.UpdateDNSRecord(tunnel.ZoneID, rec.ID, "A", tunnel.Subdomain, ip.Resolved, false)
 						if err == nil {
 							updated++
 						}
@@ -611,8 +612,8 @@ func (h *Handler) ApplyPreferredIP(w http.ResponseWriter, r *http.Request) {
 
 		for _, rec := range records {
 			if rec.Name == tunnel.PublicDomain {
-				// 更新为优选IP的A记录
-				_, err := cf.UpdateDNSRecord(tunnel.ZoneID, rec.ID, "A", tunnel.Subdomain, req.IP, true)
+				// 更新为优选IP的A记录（proxied=false，避免 Error 1000）
+				_, err := cf.UpdateDNSRecord(tunnel.ZoneID, rec.ID, "A", tunnel.Subdomain, req.IP, false)
 				if err == nil {
 					updated++
 				}

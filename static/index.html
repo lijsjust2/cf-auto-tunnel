@@ -145,8 +145,9 @@
     <div class="card">
       <h2>添加优选IP / 域名</h2>
       <div class="guide" style="margin-top:0;margin-bottom:16px">
-        添加后<strong>自动应用</strong>到所有隧道，将DNS改为A记录指向优选IP（开启小黄云代理）<br>
-        支持输入 <strong>IPv4地址</strong>（如 <code>104.16.0.1</code>）或 <strong>走CF的域名</strong>（如 <code>icook.hk</code>），域名会自动解析为IP
+        添加后<strong>自动应用</strong>到所有隧道，将DNS改为A记录指向优选IP（<strong>灰色云/仅DNS</strong>）<br>
+        <b style="color:var(--warning)">注意：请使用 Cloudflare Anycast IP（如 <code>104.16.0.1</code>），不要用 CF NS IP（172.64.x.x 等会报 Error 1000）</b><br>
+        支持输入 <strong>IPv4地址</strong>（如 <code>104.16.0.1</code>）或 <strong>走CF的域名</strong>（域名会自动解析为IP）
       </div>
       <div class="form-group">
         <label>优选IP地址 或 可优选域名</label>
@@ -162,7 +163,7 @@
     <div class="card">
       <h2>已添加的优选IP</h2>
       <div class="guide" style="margin-top:0;margin-bottom:8px;font-size:12px">
-        当前生效的优选IP会自动写入所有隧道域名的A记录，删除后会恢复为CNAME指向隧道
+        当前生效的优选IP会写入所有隧道域名的A记录（灰色云），删除后恢复为CNAME指向隧道（橙色云）
       </div>
       <div id="ipTags" class="ip-tags">
         <span style="color:var(--text-secondary);font-size:13px">暂无优选IP</span>
